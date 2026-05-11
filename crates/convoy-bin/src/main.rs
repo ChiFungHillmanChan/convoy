@@ -15,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Run the coordination daemon.
+    /// Run the coordination daemon (heartbeat probe + expiry + export loops).
     Daemon {
         /// Run in the foreground (do not daemonize).
         #[arg(long)]
