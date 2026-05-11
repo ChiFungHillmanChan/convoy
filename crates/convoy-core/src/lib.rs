@@ -4,8 +4,10 @@
 #![warn(missing_docs)]
 
 pub mod ids;
+pub mod project;
 
 pub use ids::{Nickname, NicknameError, SessionId};
+pub use project::ProjectId;
 
 /// Convoy crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
