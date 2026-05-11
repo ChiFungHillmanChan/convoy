@@ -5,9 +5,13 @@ use convoy_daemon::rpc::{Request, Response};
 use convoy_daemon::DaemonClient;
 
 pub async fn run() -> anyhow::Result<()> {
-    let session_id = std::env::var("CLAUDE_SESSION_ID")
-        .map(SessionId::from_string_unchecked)
-        .unwrap_or_else(|_| SessionId::new());
+    // SessionStart receives JSON on stdin with `session_id`, `cwd`, etc.
+    // Fall back to env var or a fresh uuid only when stdin is empty (manual
+    // smoke tests).
+    let session_id = match crate::read_hook_input() {
+        Ok((id, _)) => id,
+        Err(_) => SessionId::new(),
+    };
     let cwd = std::env::current_dir()?;
     let project_id = project_id_from_cwd()?;
 

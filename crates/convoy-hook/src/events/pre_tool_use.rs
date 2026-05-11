@@ -3,8 +3,7 @@ use convoy_daemon::rpc::{Request, Response};
 use convoy_daemon::DaemonClient;
 
 pub async fn run() -> anyhow::Result<()> {
-    let session_id = crate::read_session_id()?;
-    let payload: serde_json::Value = serde_json::from_reader(std::io::stdin())?;
+    let (session_id, payload) = crate::read_hook_input()?;
     let project_id = project_id_from_cwd()?;
 
     let socket = crate::default_socket();

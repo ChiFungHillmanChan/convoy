@@ -12,8 +12,7 @@ fn git_branch_regex() -> &'static regex::Regex {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let session_id = crate::read_session_id()?;
-    let payload: serde_json::Value = serde_json::from_reader(std::io::stdin())?;
+    let (session_id, payload) = crate::read_hook_input()?;
     let project_id = project_id_from_cwd()?;
 
     let client = DaemonClient::connect(&crate::default_socket()).await?;

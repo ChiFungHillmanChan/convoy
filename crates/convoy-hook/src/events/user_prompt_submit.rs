@@ -3,7 +3,7 @@ use convoy_daemon::rpc::{Request, Response};
 use convoy_daemon::DaemonClient;
 
 pub async fn run() -> anyhow::Result<()> {
-    let session_id = crate::read_session_id()?;
+    let (session_id, _payload) = crate::read_hook_input()?;
     let project_id = project_id_from_cwd()?;
     let client = DaemonClient::connect(&crate::default_socket()).await?;
     let _ = client.call_project(project_id.clone(), Request::Heartbeat { id: session_id.clone() }).await?;
