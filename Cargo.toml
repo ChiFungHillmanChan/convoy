@@ -6,6 +6,7 @@ members = [
     "crates/convoy-daemon",
     "crates/convoy-hook",
     "crates/convoy-cli",
+    "crates/convoy-bin",
 ]
 
 [workspace.package]
