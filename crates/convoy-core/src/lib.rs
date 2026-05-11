@@ -3,6 +3,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod ids;
+
+pub use ids::{Nickname, NicknameError, SessionId};
+
 /// Convoy crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
