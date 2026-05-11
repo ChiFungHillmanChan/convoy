@@ -9,3 +9,8 @@ Cargo.lock.bak
 
 # Local convoy state when dogfooding
 /scratch/
+
+*.swp
+*.swo
+.env
+.envrc
