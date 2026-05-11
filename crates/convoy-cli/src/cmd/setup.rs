@@ -35,6 +35,6 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
     std::fs::write(&settings, serde_json::to_string_pretty(&root)?)?;
     println!("wrote hooks to {}", settings.display());
     println!();
-    println!("Next: run `claude mcp add convoy -- convoy mcp` to enable MCP tools.");
+    println!("Hooks installed. Use 'convoy session ...' subcommands directly via Bash.");
     Ok(())
 }
