@@ -10,6 +10,31 @@
 
 ---
 
+## Plan Amendments
+
+**2026-05-11 (after Task 3):** Cargo refuses to load a workspace whose `members` array references directories that do not exist. The original Task 1 declared all 7 members upfront, which works for `cargo metadata` (it errors gracefully) but breaks `cargo test -p <member>`. **Amendment:** workspace `members` list grows incrementally. Each task that creates a new crate (Tasks 11, 20, 25, 27, 30, 34) must also add the crate's path to `[workspace] members` in the root `Cargo.toml` as part of that task. As of Task 3, members = `["crates/convoy-core"]` only.
+
+**2026-05-11 (after Task 3):** MSRV bumped from 1.78 to 1.85. Transitive deps (notably `getrandom`) require Rust edition 2024 which lands in 1.85. Both `Cargo.toml`'s `rust-version` and `rust-toolchain.toml`'s channel pin updated. Commit: `956b76e`.
+
+**2026-05-11 (after Phase 3):** Phase 4 (`convoy-mcp`) DEFERRED to M1.1. The `rmcp` Rust SDK is still 0.x and API-unstable as of May 2026; pinning it now would force rework before M1 ships. Instead, the model interacts with Convoy via Bash `convoy session ...` subcommands added to Phase 6. Hooks remain unchanged (they call daemon RPC directly over UNIX socket, no MCP needed). All M1 acceptance criteria from spec §15 are satisfiable without MCP — the model just uses Bash tool calls instead of native MCP tools. Phase 4 will land in M1.1 once `rmcp` stabilises (or we pick a replacement). The `crates/convoy-mcp/` directory is NOT created in M1; the workspace member is not added.
+
+**2026-05-11 (Phase 6 expanded):** To compensate for skipped Phase 4, Phase 6 (`convoy-cli`) gains a `session` subcommand group that wraps every daemon RPC the model would have called via MCP:
+- `convoy session send --to <id|--broadcast> --kind <kind> <body>`
+- `convoy session claim <abs-path> [--reason <text>] [--ttl <sec>]`
+- `convoy session release <abs-path>`
+- `convoy session inbox [--unread-only] [--limit N]`
+- `convoy session mark-read <id>...`
+- `convoy session status <summary>` (push status update)
+- `convoy session list-sessions`
+- `convoy session locks` (list own claims)
+- `convoy session wait --condition <json> [--timeout <sec>]`
+- `convoy session cancel-wait <wait-id>`
+- `convoy session rename <new-nickname>`
+
+These subcommands read their owning session id from the `CLAUDE_SESSION_ID` env var (which the SessionStart hook also reads), with a `--session <id>` override for non-Claude callers / tests.
+
+---
+
 ## File Structure
 
 Locked-in workspace layout. Every task names exact paths.

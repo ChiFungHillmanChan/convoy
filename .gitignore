@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Local convoy state when dogfooding
+/scratch/
+
+*.swp
+*.swo
+.env
+.envrc

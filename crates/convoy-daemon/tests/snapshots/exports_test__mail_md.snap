@@ -1,0 +1,7 @@
+---
+source: crates/convoy-daemon/tests/exports_test.rs
+expression: mail_md
+---
+# Recent mail
+
+- [info] [SHORT6] -> [SHORT6] : hello there

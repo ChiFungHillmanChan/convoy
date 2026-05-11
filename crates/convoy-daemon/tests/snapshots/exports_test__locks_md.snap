@@ -1,0 +1,7 @@
+---
+source: crates/convoy-daemon/tests/exports_test.rs
+expression: locks_md
+---
+# Active locks
+
+- /project/src/main.rs held by [SHORT6] (reason: editing) until [TIMESTAMP]

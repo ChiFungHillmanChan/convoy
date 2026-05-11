@@ -1,0 +1,23 @@
+[package]
+name = "convoy-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+convoy-core = { path = "../convoy-core" }
+convoy-store = { path = "../convoy-store" }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+async-trait = "0.1"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+insta = { version = "1", features = ["yaml", "filters"] }

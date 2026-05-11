@@ -1,0 +1,25 @@
+[package]
+name = "convoy-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+convoy-core   = { path = "../convoy-core" }
+convoy-store  = { path = "../convoy-store" }
+convoy-daemon = { path = "../convoy-daemon" }
+convoy-cli    = { path = "../convoy-cli" }
+anyhow        = { workspace = true }
+tokio         = { workspace = true }
+tempfile      = { workspace = true }
+chrono        = { workspace = true }
+serde_json    = { workspace = true }
+
+[[test]]
+name = "two_session_basics"
+path = "tests/e2e/two_session_basics.rs"
+
+[[test]]
+name = "crash_recovery"
+path = "tests/e2e/crash_recovery.rs"

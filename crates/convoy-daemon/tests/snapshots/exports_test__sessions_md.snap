@@ -1,0 +1,15 @@
+---
+source: crates/convoy-daemon/tests/exports_test.rs
+expression: sessions_md
+---
+# Sessions
+
+Updated: [TIMESTAMP]  (auto-generated, do not edit)
+
+## Active (1)
+### test-session  (#[SHORT], branch Some("main"))
+- pid: 12345
+- started: [TIMESTAMP]
+- last status: "working on tests"
+
+## Ended (0)

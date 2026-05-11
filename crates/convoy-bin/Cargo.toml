@@ -1,0 +1,24 @@
+[package]
+name = "convoy-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "convoy"
+path = "src/main.rs"
+
+[dependencies]
+convoy-core   = { path = "../convoy-core" }
+convoy-store  = { path = "../convoy-store" }
+convoy-daemon = { path = "../convoy-daemon" }
+convoy-hook   = { path = "../convoy-hook" }
+convoy-cli    = { path = "../convoy-cli" }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+dirs = "5"
