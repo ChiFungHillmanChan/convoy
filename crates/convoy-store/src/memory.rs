@@ -109,11 +109,54 @@ impl Store for MemoryStore {
         Ok(())
     }
 
+    async fn insert_message(&self, msg: Message) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().messages.push(msg);
+        Ok(())
+    }
+
+    async fn inbox(
+        &self,
+        for_session: &SessionId,
+        unread_only: bool,
+        limit: usize,
+    ) -> Result<Vec<Message>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let mut out: Vec<Message> = inner
+            .messages
+            .iter()
+            .filter(|m| match &m.to {
+                Some(to) => to == for_session,
+                None => m.from != *for_session, // broadcasts excluding own
+            })
+            .filter(|m| !unread_only || m.read_at.is_none())
+            .cloned()
+            .collect();
+        out.sort_by_key(|m| m.created_at);
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    async fn mark_read(&self, ids: &[MessageId], now: DateTime<Utc>) -> Result<usize, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut marked = 0;
+        for m in inner.messages.iter_mut() {
+            if ids.contains(&m.id) && m.read_at.is_none() {
+                m.read_at = Some(now);
+                marked += 1;
+            }
+        }
+        Ok(marked)
+    }
+
+    async fn recent_messages(&self, limit: usize) -> Result<Vec<Message>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let mut v: Vec<Message> = inner.messages.iter().cloned().collect();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v.truncate(limit);
+        Ok(v)
+    }
+
     // === remaining trait methods stubbed for later tasks ===
-    async fn insert_message(&self, _msg: Message) -> Result<(), StoreError> { todo!() }
-    async fn inbox(&self, _for_session: &SessionId, _unread_only: bool, _limit: usize) -> Result<Vec<Message>, StoreError> { todo!() }
-    async fn mark_read(&self, _ids: &[MessageId], _now: DateTime<Utc>) -> Result<usize, StoreError> { todo!() }
-    async fn recent_messages(&self, _limit: usize) -> Result<Vec<Message>, StoreError> { todo!() }
     async fn claim_file(&self, _lock: FileLock) -> Result<(), StoreError> { todo!() }
     async fn release_file(&self, _abs_path: &std::path::Path, _session: &SessionId) -> Result<(), StoreError> { todo!() }
     async fn list_locks(&self) -> Result<Vec<FileLock>, StoreError> { todo!() }
@@ -176,5 +219,60 @@ mod tests {
         store.register_session(a, Utc::now()).await.unwrap();
         store.rename_session(&id, Nickname::new("renamed").unwrap()).await.unwrap();
         assert_eq!(store.get_session(&id).await.unwrap().nickname.as_str(), "renamed");
+    }
+
+    use convoy_core::{Message, MessageId, MessageKind};
+
+    fn msg(from: &SessionId, to: Option<&SessionId>, body: &str) -> Message {
+        Message {
+            id: MessageId::new(),
+            from: from.clone(),
+            to: to.cloned(),
+            kind: MessageKind::Info,
+            in_reply_to: None,
+            body: body.into(),
+            created_at: Utc::now(),
+            read_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn inbox_includes_targeted_and_broadcast_excludes_self() {
+        let store = MemoryStore::new();
+        let alice = SessionId::new();
+        let bob = SessionId::new();
+        store.insert_message(msg(&alice, Some(&bob), "hi bob")).await.unwrap();
+        store.insert_message(msg(&alice, None, "broadcast")).await.unwrap();
+        store.insert_message(msg(&bob, None, "from bob")).await.unwrap();
+        let bob_inbox = store.inbox(&bob, true, 100).await.unwrap();
+        assert_eq!(bob_inbox.len(), 2); // "hi bob" + "broadcast", not bob's own
+        let bob_bodies: Vec<_> = bob_inbox.iter().map(|m| m.body.as_str()).collect();
+        assert!(bob_bodies.contains(&"hi bob"));
+        assert!(bob_bodies.contains(&"broadcast"));
+    }
+
+    #[tokio::test]
+    async fn mark_read_only_counts_first_time() {
+        let store = MemoryStore::new();
+        let alice = SessionId::new();
+        let bob = SessionId::new();
+        let m = msg(&alice, Some(&bob), "x");
+        let id = m.id.clone();
+        store.insert_message(m).await.unwrap();
+        assert_eq!(store.mark_read(&[id.clone()], Utc::now()).await.unwrap(), 1);
+        assert_eq!(store.mark_read(&[id], Utc::now()).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn inbox_unread_only_filters() {
+        let store = MemoryStore::new();
+        let alice = SessionId::new();
+        let bob = SessionId::new();
+        let m = msg(&alice, Some(&bob), "x");
+        let id = m.id.clone();
+        store.insert_message(m).await.unwrap();
+        store.mark_read(&[id], Utc::now()).await.unwrap();
+        assert!(store.inbox(&bob, true, 100).await.unwrap().is_empty());
+        assert_eq!(store.inbox(&bob, false, 100).await.unwrap().len(), 1);
     }
 }
