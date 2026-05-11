@@ -1,7 +1,6 @@
 //! Convoy daemon.
 
-#![forbid(unsafe_code)]
-
+pub mod liveness;
 pub mod rpc;
 pub mod server;
 
