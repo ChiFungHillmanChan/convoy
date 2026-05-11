@@ -10,6 +10,14 @@
 
 ---
 
+## Plan Amendments
+
+**2026-05-11 (after Task 3):** Cargo refuses to load a workspace whose `members` array references directories that do not exist. The original Task 1 declared all 7 members upfront, which works for `cargo metadata` (it errors gracefully) but breaks `cargo test -p <member>`. **Amendment:** workspace `members` list grows incrementally. Each task that creates a new crate (Tasks 11, 20, 25, 27, 30, 34) must also add the crate's path to `[workspace] members` in the root `Cargo.toml` as part of that task. As of Task 3, members = `["crates/convoy-core"]` only.
+
+**2026-05-11 (after Task 3):** MSRV bumped from 1.78 to 1.85. Transitive deps (notably `getrandom`) require Rust edition 2024 which lands in 1.85. Both `Cargo.toml`'s `rust-version` and `rust-toolchain.toml`'s channel pin updated. Commit: `956b76e`.
+
+---
+
 ## File Structure
 
 Locked-in workspace layout. Every task names exact paths.
