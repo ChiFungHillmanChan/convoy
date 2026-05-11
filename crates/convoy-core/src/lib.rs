@@ -5,9 +5,11 @@
 
 pub mod ids;
 pub mod project;
+pub mod lock;
 
 pub use ids::{Nickname, NicknameError, SessionId};
 pub use project::ProjectId;
+pub use lock::FileLock;
 
 /// Convoy crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
