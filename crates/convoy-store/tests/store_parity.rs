@@ -3,6 +3,7 @@
 use chrono::{Duration, Utc};
 use convoy_core::{Agent, FileLock, Message, MessageId, MessageKind, Nickname, SessionId, WaitCondition};
 use convoy_store::{MemoryStore, RegisterArgs, SqliteStore, Store, StoreError, WaitRecord};
+use proptest::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
@@ -364,4 +365,39 @@ async fn memory_store_events() {
 async fn sqlite_store_events() {
     let (_store, _tmp) = sqlite_store();
     run_events_parity(_store).await;
+}
+
+// ---------------------------------------------------------------------------
+// Fuzz test: claim_file race invariant
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #[test]
+    fn unexpired_locks_are_unique(
+        path in "[a-z]{1,8}",
+        n_actors in 2usize..6,
+    ) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+            let path = std::path::PathBuf::from(format!("/{}", path));
+            let now = Utc::now();
+            let actors: Vec<_> = (0..n_actors).map(|_| SessionId::new()).collect();
+            let mut accepted = 0;
+            for a in &actors {
+                let lock = FileLock {
+                    abs_path: path.clone(),
+                    session_id: a.clone(),
+                    reason: None,
+                    claimed_at: now,
+                    expires_at: now + Duration::minutes(30),
+                };
+                if store.claim_file(lock).await.is_ok() {
+                    accepted += 1;
+                }
+            }
+            prop_assert_eq!(accepted, 1, "exactly one session must own the lock");
+            Ok(())
+        }).unwrap();
+    }
 }
