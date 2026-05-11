@@ -1,14 +1,16 @@
+use convoy_core::project_id_from_cwd;
 use convoy_daemon::rpc::{Request, Response};
 use convoy_daemon::DaemonClient;
 
 pub async fn run() -> anyhow::Result<()> {
     let session_id = crate::read_session_id()?;
+    let project_id = project_id_from_cwd()?;
     let client = DaemonClient::connect(&crate::default_socket()).await?;
-    let _ = client.call(Request::Heartbeat { id: session_id.clone() }).await?;
+    let _ = client.call_project(project_id.clone(), Request::Heartbeat { id: session_id.clone() }).await?;
 
     // Unread mail
     if let Response::Inbox { messages } = client
-        .call(Request::ReadInbox {
+        .call_project(project_id, Request::ReadInbox {
             id: session_id.clone(),
             unread_only: true,
             limit: 10,

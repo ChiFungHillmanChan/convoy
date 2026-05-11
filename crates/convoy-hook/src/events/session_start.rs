@@ -1,6 +1,6 @@
 //! Auto-register on Claude Code SessionStart.
 
-use convoy_core::{Nickname, SessionId};
+use convoy_core::{project_id_from_cwd, Nickname, SessionId};
 use convoy_daemon::rpc::{Request, Response};
 use convoy_daemon::DaemonClient;
 
@@ -9,7 +9,7 @@ pub async fn run() -> anyhow::Result<()> {
         .map(SessionId::from_string_unchecked)
         .unwrap_or_else(|_| SessionId::new());
     let cwd = std::env::current_dir()?;
-    let _project_id = convoy_core::ProjectId::from_canonical_path(&cwd);
+    let project_id = project_id_from_cwd()?;
 
     let socket = std::path::PathBuf::from(format!(
         "{}/.convoy/daemon.sock",
@@ -31,10 +31,10 @@ pub async fn run() -> anyhow::Result<()> {
         branch,
         worktree_path: Some(cwd),
     };
-    let _ = client.call(req).await?;
+    let _ = client.call_project(project_id.clone(), req).await?;
 
     // Inject current peers and unread mail.
-    let sessions = match client.call(Request::ListSessions { include_ended: false }).await? {
+    let sessions = match client.call_project(project_id, Request::ListSessions { include_ended: false }).await? {
         Response::Sessions { sessions } => sessions,
         _ => vec![],
     };

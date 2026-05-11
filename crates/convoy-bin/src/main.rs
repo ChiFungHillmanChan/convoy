@@ -164,24 +164,14 @@ async fn run_hook(event: &str) -> anyhow::Result<()> {
 async fn run_daemon(foreground: bool) -> anyhow::Result<()> {
     use convoy_daemon::{
         expiry, exports, liveness,
-        notify::Notifier,
         server::Daemon,
     };
-    use convoy_store::SqliteStore;
     use std::time::Duration;
 
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no HOME dir"))?;
     let convoy_dir = home.join(".convoy");
     std::fs::create_dir_all(&convoy_dir)?;
 
-    // Per-project state lives under ~/.convoy/projects/<pid>/
-    // For the daemon's own DB we use a shared "daemon" project.
-    let daemon_db_dir = convoy_dir.join("daemon");
-    std::fs::create_dir_all(&daemon_db_dir)?;
-    let db_path = daemon_db_dir.join("state.db");
-    let store: Arc<dyn convoy_store::Store> = Arc::new(SqliteStore::open(&db_path)?);
-
-    let notifier = Notifier::new(store.clone());
     let socket_path = convoy_dir.join("daemon.sock");
 
     // Write PID file.
@@ -205,29 +195,56 @@ async fn run_daemon(foreground: bool) -> anyhow::Result<()> {
 
     tracing::info!("convoyd starting (pid {})", std::process::id());
 
-    let daemon = Arc::new(Daemon::new(store.clone(), notifier.clone()));
+    // Multi-project daemon: no single shared DB.
+    // Per-project stores are lazily created under ~/.convoy/projects/<id>/state.db
+    let daemon = Arc::new(Daemon::new_multi(home.clone()));
 
-    // Spawn background loops.
-    let store_liveness = store.clone();
+    // Spawn background loops that iterate over all currently-known projects.
+    let daemon_liveness = daemon.clone();
     tokio::spawn(async move {
-        liveness::run(
-            store_liveness,
-            Duration::from_secs(60),
-            chrono::Duration::seconds(300),
-        )
-        .await;
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let stores = daemon_liveness.all_stores().await;
+            for (_pid, store) in stores {
+                liveness::tick(store, chrono::Duration::seconds(300)).await;
+            }
+        }
     });
 
-    let store_expiry = store.clone();
-    let notifier_expiry = notifier.clone();
+    let daemon_expiry = daemon.clone();
     tokio::spawn(async move {
-        expiry::run(store_expiry, Duration::from_secs(30), notifier_expiry).await;
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let now = chrono::Utc::now();
+            let stores_notifiers = daemon_expiry.all_stores_with_notifiers().await;
+            for (_pid, store, notifier) in stores_notifiers {
+                expiry::tick(store, now, notifier).await;
+            }
+        }
     });
 
-    let store_exports = store.clone();
-    let exports_dir = daemon_db_dir.clone();
+    let daemon_exports = daemon.clone();
+    let projects_root = home.join(".convoy").join("projects");
     tokio::spawn(async move {
-        exports::run(store_exports, exports_dir, Duration::from_secs(10)).await;
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            let stores = daemon_exports.all_stores().await;
+            for (pid, store) in stores {
+                let exports_dir = projects_root.join(pid.as_str());
+                if let Err(e) = tokio::fs::create_dir_all(&exports_dir).await {
+                    tracing::warn!("create exports dir: {e}");
+                    continue;
+                }
+                let exports_path = exports_dir.join("exports");
+                if let Err(e) = tokio::fs::create_dir_all(&exports_path).await {
+                    tracing::warn!("create exports subdir: {e}");
+                    continue;
+                }
+                exports::render_sessions(&store, &exports_path).await.ok();
+                exports::render_mail(&store, &exports_path).await.ok();
+                exports::render_locks(&store, &exports_path).await.ok();
+            }
+        }
     });
 
     // Serve. chmod the socket to 0600 shortly after binding.

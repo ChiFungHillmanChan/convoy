@@ -13,3 +13,4 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+anyhow = { workspace = true }

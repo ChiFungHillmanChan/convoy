@@ -12,7 +12,7 @@ pub mod rate_limit;
 pub mod session;
 
 pub use ids::{Nickname, NicknameError, SessionId};
-pub use project::ProjectId;
+pub use project::{project_id_from_cwd, ProjectId};
 pub use lock::FileLock;
 pub use message::{Message, MessageId, MessageKind};
 pub use wait::{Event, WaitCondition};

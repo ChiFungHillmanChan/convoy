@@ -14,20 +14,25 @@ pub async fn run(
 ) {
     loop {
         tokio::time::sleep(interval).await;
-        let now = chrono::Utc::now();
-        let sessions = match store.list_active_sessions().await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for s in sessions {
-            let alive = pid_alive(s.pid);
-            if alive {
-                let _ = store.touch_alive(&s.id, now).await;
-            } else if now - s.last_seen_alive > dead_threshold {
-                tracing::info!(session=%s.id, "session pid dead, reaping");
-                let _ = store.release_locks_of(&s.id).await;
-                let _ = store.end_session(&s.id, now).await;
-            }
+        tick(store.clone(), dead_threshold).await;
+    }
+}
+
+/// Single liveness sweep over one store. Exposed for multi-project daemon loop.
+pub async fn tick(store: Arc<dyn Store>, dead_threshold: chrono::Duration) {
+    let now = chrono::Utc::now();
+    let sessions = match store.list_active_sessions().await {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    for s in sessions {
+        let alive = pid_alive(s.pid);
+        if alive {
+            let _ = store.touch_alive(&s.id, now).await;
+        } else if now - s.last_seen_alive > dead_threshold {
+            tracing::info!(session=%s.id, "session pid dead, reaping");
+            let _ = store.release_locks_of(&s.id).await;
+            let _ = store.end_session(&s.id, now).await;
         }
     }
 }

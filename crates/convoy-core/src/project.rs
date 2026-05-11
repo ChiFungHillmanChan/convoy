@@ -34,6 +34,51 @@ impl fmt::Display for ProjectId {
     }
 }
 
+/// Derive a [`ProjectId`] from the current working directory.
+///
+/// For git repositories, resolves to the common git dir (handles worktrees
+/// by calling `git rev-parse --git-common-dir`). Falls back to a plain
+/// `std::fs::canonicalize` of cwd on non-git directories.
+pub fn project_id_from_cwd() -> anyhow::Result<ProjectId> {
+    let cwd = std::env::current_dir()?;
+    // Try git common dir first (so worktrees hash to the same project).
+    if let Some(common) = git_common_dir(&cwd) {
+        // The common dir ends in /.git or similar; we want the worktree root.
+        // Walk up to find the working tree root: parent of .git dir.
+        let root = if common.ends_with(".git") {
+            common.parent().map(|p| p.to_path_buf()).unwrap_or(common)
+        } else {
+            common
+        };
+        let canonical = std::fs::canonicalize(&root).unwrap_or(root);
+        return Ok(ProjectId::from_canonical_path(&canonical));
+    }
+    let canonical = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    Ok(ProjectId::from_canonical_path(&canonical))
+}
+
+fn git_common_dir(cwd: &Path) -> Option<std::path::PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() || s == "--git-common-dir" {
+        return None;
+    }
+    // May be relative to cwd
+    let p = std::path::PathBuf::from(&s);
+    if p.is_absolute() {
+        Some(p)
+    } else {
+        Some(cwd.join(p))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

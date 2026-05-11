@@ -1,7 +1,7 @@
 //! `convoy session` subcommand group — wraps every daemon RPC for Bash callers.
 
 use clap::{Args, Subcommand};
-use convoy_core::{MessageKind, SessionId, WaitCondition};
+use convoy_core::{project_id_from_cwd, MessageKind, SessionId, WaitCondition};
 use convoy_daemon::{DaemonClient, Request};
 use std::path::PathBuf;
 
@@ -94,12 +94,13 @@ fn default_socket() -> PathBuf {
 pub async fn run(args: SessionArgs) -> anyhow::Result<()> {
     let session_id = resolve_session(args.session)?;
     let client = DaemonClient::connect(&default_socket()).await?;
+    let project_id = project_id_from_cwd()?;
 
     let resp = match args.command {
         SessionCmd::Send { to, kind, body } => {
             let to_id = to.map(SessionId::from_string_unchecked);
             let msg_kind = MessageKind::from_tag(&kind).unwrap_or(MessageKind::Info);
-            client.call(Request::SendMessage {
+            client.call_project(project_id, Request::SendMessage {
                 from: session_id,
                 to: to_id,
                 kind: msg_kind,
@@ -108,7 +109,7 @@ pub async fn run(args: SessionArgs) -> anyhow::Result<()> {
             }).await?
         }
         SessionCmd::Claim { abs_path, reason, ttl } => {
-            client.call(Request::ClaimFile {
+            client.call_project(project_id, Request::ClaimFile {
                 session: session_id,
                 abs_path,
                 reason,
@@ -116,36 +117,36 @@ pub async fn run(args: SessionArgs) -> anyhow::Result<()> {
             }).await?
         }
         SessionCmd::Release { abs_path } => {
-            client.call(Request::ReleaseFile {
+            client.call_project(project_id, Request::ReleaseFile {
                 session: session_id,
                 abs_path,
             }).await?
         }
         SessionCmd::Inbox { unread_only, limit } => {
-            client.call(Request::ReadInbox {
+            client.call_project(project_id, Request::ReadInbox {
                 id: session_id,
                 unread_only,
                 limit,
             }).await?
         }
         SessionCmd::MarkRead { ids } => {
-            client.call(Request::MarkRead { ids }).await?
+            client.call_project(project_id, Request::MarkRead { ids }).await?
         }
         SessionCmd::Status { summary } => {
-            client.call(Request::UpdateStatus {
+            client.call_project(project_id, Request::UpdateStatus {
                 id: session_id,
                 summary,
             }).await?
         }
         SessionCmd::ListSessions => {
-            client.call(Request::ListSessions { include_ended: false }).await?
+            client.call_project(project_id, Request::ListSessions { include_ended: false }).await?
         }
         SessionCmd::Locks => {
-            client.call(Request::ListMyClaims { session: session_id }).await?
+            client.call_project(project_id, Request::ListMyClaims { session: session_id }).await?
         }
         SessionCmd::Wait { condition, timeout } => {
             let cond: WaitCondition = serde_json::from_str(&condition)?;
-            client.call(Request::WaitFor {
+            client.call_project(project_id, Request::WaitFor {
                 session: session_id,
                 condition: cond,
                 timeout_sec: timeout,
@@ -153,10 +154,10 @@ pub async fn run(args: SessionArgs) -> anyhow::Result<()> {
             }).await?
         }
         SessionCmd::CancelWait { wait_id } => {
-            client.call(Request::CancelWait { wait_id }).await?
+            client.call_project(project_id, Request::CancelWait { wait_id }).await?
         }
         SessionCmd::Rename { new_nickname } => {
-            client.call(Request::Rename {
+            client.call_project(project_id, Request::Rename {
                 id: session_id,
                 new: new_nickname,
             }).await?

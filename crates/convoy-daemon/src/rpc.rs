@@ -1,8 +1,18 @@
 //! Daemon RPC protocol. JSON-encoded, one line per message.
 
-use convoy_core::{FileLock, MessageKind, Nickname, SessionId, WaitCondition};
+use convoy_core::{FileLock, MessageKind, Nickname, ProjectId, SessionId, WaitCondition};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Wire wrapper that routes an operation to a specific project's store.
+/// Callers serialize this on the wire; the daemon deserializes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Envelope {
+    /// Project this operation targets.
+    pub project_id: ProjectId,
+    /// The actual operation.
+    pub op: Request,
+}
 
 /// All requests from MCP / hook / CLI to daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
