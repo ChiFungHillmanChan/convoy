@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/convoy-core",
     "crates/convoy-store",
+    "crates/convoy-daemon",
 ]
 
 [workspace.package]
