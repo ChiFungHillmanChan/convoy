@@ -156,14 +156,81 @@ impl Store for MemoryStore {
         Ok(v)
     }
 
+    async fn claim_file(&self, lock: FileLock) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        // If an existing lock is held by another session AND not expired, refuse.
+        if let Some(existing) = inner.locks.get(&lock.abs_path) {
+            let now = Utc::now();
+            if !existing.is_expired(now) && existing.session_id != lock.session_id {
+                return Err(StoreError::LockHeld(existing.session_id.clone()));
+            }
+        }
+        inner.locks.insert(lock.abs_path.clone(), lock);
+        Ok(())
+    }
+
+    async fn release_file(&self, abs_path: &std::path::Path, session: &SessionId) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(existing) = inner.locks.get(abs_path) {
+            if existing.session_id != *session {
+                return Err(StoreError::LockHeld(existing.session_id.clone()));
+            }
+            inner.locks.remove(abs_path);
+            Ok(())
+        } else {
+            Err(StoreError::NotFound)
+        }
+    }
+
+    async fn list_locks(&self) -> Result<Vec<FileLock>, StoreError> {
+        Ok(self.inner.lock().unwrap().locks.values().cloned().collect())
+    }
+
+    async fn locks_held_by(&self, session: &SessionId) -> Result<Vec<FileLock>, StoreError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .locks
+            .values()
+            .filter(|l| l.session_id == *session)
+            .cloned()
+            .collect())
+    }
+
+    async fn lock_for(&self, abs_path: &std::path::Path) -> Result<Option<FileLock>, StoreError> {
+        Ok(self.inner.lock().unwrap().locks.get(abs_path).cloned())
+    }
+
+    async fn release_expired_locks(&self, now: DateTime<Utc>) -> Result<Vec<FileLock>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let expired: Vec<_> = inner
+            .locks
+            .values()
+            .filter(|l| l.is_expired(now))
+            .cloned()
+            .collect();
+        for l in &expired {
+            inner.locks.remove(&l.abs_path);
+        }
+        Ok(expired)
+    }
+
+    async fn release_locks_of(&self, session: &SessionId) -> Result<Vec<FileLock>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let owned: Vec<_> = inner
+            .locks
+            .values()
+            .filter(|l| l.session_id == *session)
+            .cloned()
+            .collect();
+        for l in &owned {
+            inner.locks.remove(&l.abs_path);
+        }
+        Ok(owned)
+    }
+
     // === remaining trait methods stubbed for later tasks ===
-    async fn claim_file(&self, _lock: FileLock) -> Result<(), StoreError> { todo!() }
-    async fn release_file(&self, _abs_path: &std::path::Path, _session: &SessionId) -> Result<(), StoreError> { todo!() }
-    async fn list_locks(&self) -> Result<Vec<FileLock>, StoreError> { todo!() }
-    async fn locks_held_by(&self, _session: &SessionId) -> Result<Vec<FileLock>, StoreError> { todo!() }
-    async fn lock_for(&self, _abs_path: &std::path::Path) -> Result<Option<FileLock>, StoreError> { todo!() }
-    async fn release_expired_locks(&self, _now: DateTime<Utc>) -> Result<Vec<FileLock>, StoreError> { todo!() }
-    async fn release_locks_of(&self, _session: &SessionId) -> Result<Vec<FileLock>, StoreError> { todo!() }
     async fn push_status(&self, _session: &SessionId, _summary: String, _now: DateTime<Utc>) -> Result<(), StoreError> { todo!() }
     async fn latest_status(&self, _session: &SessionId) -> Result<Option<String>, StoreError> { todo!() }
     async fn create_wait(&self, _w: WaitRecord) -> Result<(), StoreError> { todo!() }
@@ -274,5 +341,64 @@ mod tests {
         store.mark_read(&[id], Utc::now()).await.unwrap();
         assert!(store.inbox(&bob, true, 100).await.unwrap().is_empty());
         assert_eq!(store.inbox(&bob, false, 100).await.unwrap().len(), 1);
+    }
+
+    fn fresh_lock(session: &SessionId, path: &str, ttl: chrono::Duration) -> FileLock {
+        let now = Utc::now();
+        FileLock {
+            abs_path: PathBuf::from(path),
+            session_id: session.clone(),
+            reason: None,
+            claimed_at: now,
+            expires_at: now + ttl,
+        }
+    }
+
+    #[tokio::test]
+    async fn claim_conflict_returns_lock_held() {
+        use chrono::Duration;
+        let store = MemoryStore::new();
+        let a = SessionId::new();
+        let b = SessionId::new();
+        store.claim_file(fresh_lock(&a, "/x.rs", Duration::seconds(30))).await.unwrap();
+        let err = store
+            .claim_file(fresh_lock(&b, "/x.rs", Duration::seconds(30)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::LockHeld(s) if s == a));
+    }
+
+    #[tokio::test]
+    async fn claim_succeeds_after_expiry() {
+        use chrono::Duration;
+        let store = MemoryStore::new();
+        let a = SessionId::new();
+        let b = SessionId::new();
+        store
+            .claim_file(fresh_lock(&a, "/x.rs", Duration::seconds(-1)))
+            .await
+            .unwrap();
+        store
+            .claim_file(fresh_lock(&b, "/x.rs", Duration::seconds(30)))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.lock_for(std::path::Path::new("/x.rs")).await.unwrap().unwrap().session_id,
+            b
+        );
+    }
+
+    #[tokio::test]
+    async fn release_expired_returns_them() {
+        use chrono::Duration;
+        let store = MemoryStore::new();
+        let a = SessionId::new();
+        store
+            .claim_file(fresh_lock(&a, "/x.rs", Duration::seconds(-1)))
+            .await
+            .unwrap();
+        let dropped = store.release_expired_locks(Utc::now()).await.unwrap();
+        assert_eq!(dropped.len(), 1);
+        assert!(store.list_locks().await.unwrap().is_empty());
     }
 }
