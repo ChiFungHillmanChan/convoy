@@ -230,15 +230,86 @@ impl Store for MemoryStore {
         Ok(owned)
     }
 
-    // === remaining trait methods stubbed for later tasks ===
-    async fn push_status(&self, _session: &SessionId, _summary: String, _now: DateTime<Utc>) -> Result<(), StoreError> { todo!() }
-    async fn latest_status(&self, _session: &SessionId) -> Result<Option<String>, StoreError> { todo!() }
-    async fn create_wait(&self, _w: WaitRecord) -> Result<(), StoreError> { todo!() }
-    async fn cancel_wait(&self, _id: &str) -> Result<(), StoreError> { todo!() }
-    async fn satisfy_wait(&self, _id: &str, _outcome: &str, _now: DateTime<Utc>) -> Result<(), StoreError> { todo!() }
-    async fn pending_waits(&self) -> Result<Vec<WaitRecord>, StoreError> { todo!() }
-    async fn timeout_waits(&self, _now: DateTime<Utc>) -> Result<Vec<WaitRecord>, StoreError> { todo!() }
-    async fn log_event(&self, _session: Option<&SessionId>, _kind: &str, _payload: serde_json::Value, _now: DateTime<Utc>) -> Result<(), StoreError> { todo!() }
+    async fn push_status(&self, session: &SessionId, summary: String, now: DateTime<Utc>) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.statuses.entry(session.clone()).or_default().push((now, summary));
+        Ok(())
+    }
+
+    async fn latest_status(&self, session: &SessionId) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .statuses
+            .get(session)
+            .and_then(|v| v.last().map(|(_, s)| s.clone())))
+    }
+
+    async fn create_wait(&self, w: WaitRecord) -> Result<(), StoreError> {
+        self.inner.lock().unwrap().waits.insert(w.id.clone(), w);
+        Ok(())
+    }
+
+    async fn cancel_wait(&self, id: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let w = inner.waits.get_mut(id).ok_or(StoreError::NotFound)?;
+        if w.satisfied_at.is_none() {
+            w.satisfied_at = Some(Utc::now());
+            w.outcome = Some("cancelled".into());
+        }
+        Ok(())
+    }
+
+    async fn satisfy_wait(&self, id: &str, outcome: &str, now: DateTime<Utc>) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let w = inner.waits.get_mut(id).ok_or(StoreError::NotFound)?;
+        if w.satisfied_at.is_none() {
+            w.satisfied_at = Some(now);
+            w.outcome = Some(outcome.into());
+        }
+        Ok(())
+    }
+
+    async fn pending_waits(&self) -> Result<Vec<WaitRecord>, StoreError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .waits
+            .values()
+            .filter(|w| w.satisfied_at.is_none())
+            .cloned()
+            .collect())
+    }
+
+    async fn timeout_waits(&self, now: DateTime<Utc>) -> Result<Vec<WaitRecord>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut timed_out = Vec::new();
+        for w in inner.waits.values_mut() {
+            if w.satisfied_at.is_none() && now >= w.expires_at {
+                w.satisfied_at = Some(now);
+                w.outcome = Some("timeout".into());
+                timed_out.push(w.clone());
+            }
+        }
+        Ok(timed_out)
+    }
+
+    async fn log_event(
+        &self,
+        session: Option<&SessionId>,
+        kind: &str,
+        payload: serde_json::Value,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .events
+            .push((now, session.cloned(), kind.to_string(), payload));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -400,5 +471,35 @@ mod tests {
         let dropped = store.release_expired_locks(Utc::now()).await.unwrap();
         assert_eq!(dropped.len(), 1);
         assert!(store.list_locks().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_latest_returns_last_pushed() {
+        let store = MemoryStore::new();
+        let s = SessionId::new();
+        store.push_status(&s, "phase 1".into(), Utc::now()).await.unwrap();
+        store.push_status(&s, "phase 2".into(), Utc::now()).await.unwrap();
+        assert_eq!(store.latest_status(&s).await.unwrap().as_deref(), Some("phase 2"));
+    }
+
+    #[tokio::test]
+    async fn wait_timeout_marks_outcome() {
+        use chrono::Duration;
+        let store = MemoryStore::new();
+        let now = Utc::now();
+        let w = WaitRecord {
+            id: "w1".into(),
+            session_id: SessionId::new(),
+            condition: convoy_core::WaitCondition::LockReleased { abs_path: "/x".into() },
+            hint: None,
+            created_at: now,
+            expires_at: now - Duration::seconds(1),
+            satisfied_at: None,
+            outcome: None,
+        };
+        store.create_wait(w).await.unwrap();
+        let timed = store.timeout_waits(now).await.unwrap();
+        assert_eq!(timed.len(), 1);
+        assert_eq!(timed[0].outcome.as_deref(), Some("timeout"));
     }
 }
