@@ -19,6 +19,13 @@ impl MessageId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Construct from a raw string; intended only for storage layer row-mapping. Hidden from public API.
+    #[doc(hidden)]
+    pub fn from_string_unchecked(s: String) -> Self {
+        // For store row-mapping only; do not use in normal code paths.
+        Self(s)
+    }
 }
 
 impl Default for MessageId {

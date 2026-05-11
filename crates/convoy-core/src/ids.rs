@@ -23,6 +23,13 @@ impl SessionId {
     pub fn short(&self) -> &str {
         &self.0[..6]
     }
+
+    /// Construct from a raw string; intended only for storage layer row-mapping. Hidden from public API.
+    #[doc(hidden)]
+    pub fn from_string_unchecked(s: String) -> Self {
+        // For store row-mapping only; do not use in normal code paths.
+        Self(s)
+    }
 }
 
 impl Default for SessionId {
@@ -104,6 +111,13 @@ mod tests {
         let a = SessionId::new();
         let b = SessionId::new();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn session_id_from_string_unchecked_roundtrip() {
+        let s = SessionId::new();
+        let r = SessionId::from_string_unchecked(s.as_str().to_string());
+        assert_eq!(s, r);
     }
 
     #[test]
