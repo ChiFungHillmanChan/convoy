@@ -17,7 +17,9 @@ pub struct SqliteStore {
 impl SqliteStore {
     /// Open (or create) a SQLite database at `path`, run migrations, return store.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let manager = SqliteConnectionManager::file(path);
+        let manager = SqliteConnectionManager::file(path).with_init(|c| {
+            c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+        });
         let pool = Pool::builder()
             .max_size(4)
             .build(manager)
@@ -67,6 +69,11 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     let last_seen_alive_str: String = row.get(8)?;
     let ended_at_str: Option<String> = row.get(9)?;
 
+    let parse_dt = |s: &str| -> rusqlite::Result<chrono::DateTime<chrono::Utc>> {
+        s.parse().map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            0, rusqlite::types::Type::Text, Box::new(e),
+        ))
+    };
     Ok(Session {
         id: SessionId::from_string_unchecked(id_str),
         agent: Agent::from_tag(&agent_str).unwrap_or(Agent::ClaudeCode),
@@ -74,10 +81,13 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         branch,
         worktree_path: worktree_path.map(std::path::PathBuf::from),
         nickname: Nickname::new(&nickname_str).unwrap_or_else(|_| Nickname::new("unknown").unwrap()),
-        started_at: started_at_str.parse().unwrap(),
-        last_heartbeat: last_heartbeat_str.parse().unwrap(),
-        last_seen_alive: last_seen_alive_str.parse().unwrap(),
-        ended_at: ended_at_str.map(|s| s.parse().unwrap()),
+        started_at: parse_dt(&started_at_str)?,
+        last_heartbeat: parse_dt(&last_heartbeat_str)?,
+        last_seen_alive: parse_dt(&last_seen_alive_str)?,
+        ended_at: match ended_at_str {
+            Some(s) => Some(parse_dt(&s)?),
+            None => None,
+        },
     })
 }
 
@@ -91,6 +101,11 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let created_at_str: String = row.get(6)?;
     let read_at_str: Option<String> = row.get(7)?;
 
+    let parse_dt = |s: &str| -> rusqlite::Result<chrono::DateTime<chrono::Utc>> {
+        s.parse().map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            0, rusqlite::types::Type::Text, Box::new(e),
+        ))
+    };
     Ok(Message {
         id: MessageId::from_string_unchecked(id_str),
         from: SessionId::from_string_unchecked(from_str),
@@ -98,8 +113,11 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         kind: MessageKind::from_tag(&kind_str).unwrap_or(MessageKind::Info),
         in_reply_to: reply_str.map(MessageId::from_string_unchecked),
         body,
-        created_at: created_at_str.parse().unwrap(),
-        read_at: read_at_str.map(|s| s.parse().unwrap()),
+        created_at: parse_dt(&created_at_str)?,
+        read_at: match read_at_str {
+            Some(s) => Some(parse_dt(&s)?),
+            None => None,
+        },
     })
 }
 
@@ -110,12 +128,17 @@ fn row_to_lock(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileLock> {
     let claimed_at_str: String = row.get(3)?;
     let expires_at_str: String = row.get(4)?;
 
+    let parse_dt = |s: &str| -> rusqlite::Result<chrono::DateTime<chrono::Utc>> {
+        s.parse().map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            0, rusqlite::types::Type::Text, Box::new(e),
+        ))
+    };
     Ok(FileLock {
         abs_path: std::path::PathBuf::from(abs_path_str),
         session_id: SessionId::from_string_unchecked(session_str),
         reason,
-        claimed_at: claimed_at_str.parse().unwrap(),
-        expires_at: expires_at_str.parse().unwrap(),
+        claimed_at: parse_dt(&claimed_at_str)?,
+        expires_at: parse_dt(&expires_at_str)?,
     })
 }
 
@@ -129,14 +152,25 @@ fn row_to_wait(row: &rusqlite::Row<'_>) -> rusqlite::Result<WaitRecord> {
     let satisfied_at_str: Option<String> = row.get(6)?;
     let outcome: Option<String> = row.get(7)?;
 
+    let parse_dt = |s: &str| -> rusqlite::Result<chrono::DateTime<chrono::Utc>> {
+        s.parse().map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            0, rusqlite::types::Type::Text, Box::new(e),
+        ))
+    };
+    let condition = serde_json::from_str(&condition_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     Ok(WaitRecord {
         id,
         session_id: SessionId::from_string_unchecked(session_str),
-        condition: serde_json::from_str(&condition_json).unwrap(),
+        condition,
         hint,
-        created_at: created_at_str.parse().unwrap(),
-        expires_at: expires_at_str.parse().unwrap(),
-        satisfied_at: satisfied_at_str.map(|s| s.parse().unwrap()),
+        created_at: parse_dt(&created_at_str)?,
+        expires_at: parse_dt(&expires_at_str)?,
+        satisfied_at: match satisfied_at_str {
+            Some(s) => Some(parse_dt(&s)?),
+            None => None,
+        },
         outcome,
     })
 }
@@ -435,34 +469,25 @@ impl Store for SqliteStore {
     async fn claim_file(&self, lock: FileLock) -> Result<(), StoreError> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| StoreError::Backend(anyhow!(e)))?;
+            let mut conn = pool.get().map_err(|e| StoreError::Backend(anyhow!(e)))?;
             let now_str = Utc::now().to_rfc3339();
             let path_str = lock.abs_path.to_string_lossy().into_owned();
             let session_str = lock.session_id.as_str().to_string();
 
+            // Use an immediate transaction so concurrent callers serialize here.
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| StoreError::Backend(anyhow!(e)))?;
+
             // Delete expired locks held by others, or locks held by same session
-            conn.execute(
+            tx.execute(
                 "DELETE FROM file_locks WHERE abs_path = ?1 AND (expires_at <= ?2 OR session_id = ?3)",
                 rusqlite::params![path_str, now_str, session_str],
             )
             .map_err(|e| StoreError::Backend(anyhow!(e)))?;
 
-            // Check if a non-expired lock by someone else exists
-            let existing: Option<String> = conn
-                .query_row(
-                    "SELECT session_id FROM file_locks WHERE abs_path = ?1",
-                    [&path_str],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(|e| StoreError::Backend(anyhow!(e)))?;
-
-            if let Some(holder) = existing {
-                return Err(StoreError::LockHeld(SessionId::from_string_unchecked(holder)));
-            }
-
-            conn.execute(
-                "INSERT INTO file_locks (abs_path, session_id, reason, claimed_at, expires_at)
+            // INSERT OR IGNORE — if someone else holds a live lock, this is a no-op.
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO file_locks (abs_path, session_id, reason, claimed_at, expires_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![
                     path_str,
@@ -473,6 +498,21 @@ impl Store for SqliteStore {
                 ],
             )
             .map_err(|e| StoreError::Backend(anyhow!(e)))?;
+
+            if inserted == 0 {
+                // Someone else holds a live lock; find out who.
+                let holder: String = tx
+                    .query_row(
+                        "SELECT session_id FROM file_locks WHERE abs_path = ?1",
+                        [&path_str],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| StoreError::Backend(anyhow!(e)))?;
+                tx.commit().map_err(|e| StoreError::Backend(anyhow!(e)))?;
+                return Err(StoreError::LockHeld(SessionId::from_string_unchecked(holder)));
+            }
+
+            tx.commit().map_err(|e| StoreError::Backend(anyhow!(e)))?;
             Ok(())
         })
         .await

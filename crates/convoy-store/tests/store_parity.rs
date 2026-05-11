@@ -372,14 +372,46 @@ async fn sqlite_store_events() {
 // ---------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(proptest::test_runner::Config { cases: 32, ..Default::default() })]
+
     #[test]
-    fn unexpired_locks_are_unique(
+    fn unexpired_locks_are_unique_memory(
         path in "[a-z]{1,8}",
         n_actors in 2usize..6,
     ) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+            let path = std::path::PathBuf::from(format!("/{}", path));
+            let now = Utc::now();
+            let actors: Vec<_> = (0..n_actors).map(|_| SessionId::new()).collect();
+            let mut accepted = 0;
+            for a in &actors {
+                let lock = FileLock {
+                    abs_path: path.clone(),
+                    session_id: a.clone(),
+                    reason: None,
+                    claimed_at: now,
+                    expires_at: now + Duration::minutes(30),
+                };
+                if store.claim_file(lock).await.is_ok() {
+                    accepted += 1;
+                }
+            }
+            prop_assert_eq!(accepted, 1, "exactly one session must own the lock");
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn unexpired_locks_are_unique_sqlite(
+        path in "[a-z]{1,8}",
+        n_actors in 2usize..6,
+    ) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let f = NamedTempFile::new().unwrap();
+            let store: Arc<dyn Store> = Arc::new(SqliteStore::open(f.path()).unwrap());
             let path = std::path::PathBuf::from(format!("/{}", path));
             let now = Utc::now();
             let actors: Vec<_> = (0..n_actors).map(|_| SessionId::new()).collect();
