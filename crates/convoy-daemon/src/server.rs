@@ -1,9 +1,10 @@
 //! Daemon RPC server: accepts on a UNIX socket, dispatches to handlers.
 
+use crate::notify::Notifier;
 use crate::rpc::{Request, Response};
-use convoy_core::{FileLock, Message, MessageId, MessageKind, Nickname, SessionId};
+use convoy_core::{FileLock, Message, MessageId, Nickname};
 use convoy_store::{RegisterArgs, Store, StoreError, WaitRecord};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -11,11 +12,12 @@ use tokio::net::{UnixListener, UnixStream};
 /// Holds dependencies needed by every handler.
 pub struct Daemon {
     pub store: Arc<dyn Store>,
+    pub notifier: Notifier,
 }
 
 impl Daemon {
-    pub fn new(store: Arc<dyn Store>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn Store>, notifier: Notifier) -> Self {
+        Self { store, notifier }
     }
 
     /// Bind a UNIX socket and serve forever. Removes existing socket file first.
@@ -94,9 +96,11 @@ impl Daemon {
             Request::EndSession { id } => {
                 let now = chrono::Utc::now();
                 let _ = self.store.release_locks_of(&id).await;
-                // TODO(Task 23): notifier.session_ended(&id).await
                 match self.store.end_session(&id, now).await {
-                    Ok(()) => Response::Ok,
+                    Ok(()) => {
+                        self.notifier.session_ended(&id).await;
+                        Response::Ok
+                    }
                     Err(e) => Response::Error { message: e.to_string() },
                 }
             }
@@ -159,7 +163,7 @@ impl Daemon {
                 };
                 match self.store.insert_message(msg).await {
                     Ok(()) => {
-                        // TODO(Task 23): notifier.message_created(&from, to.as_ref(), kind).await
+                        self.notifier.message_created(&from, to.as_ref(), kind).await;
                         Response::MessageCreated { id: msg_id.to_string() }
                     }
                     Err(e) => Response::Error { message: e.to_string() },
@@ -202,7 +206,22 @@ impl Daemon {
                 };
                 match self.store.claim_file(lock).await {
                     Ok(()) => {
-                        // TODO(Task 23): emit ClaimNotice message and notifier.message_created(...)
+                        // Emit a ClaimNotice broadcast message
+                        let notice_id = MessageId::new();
+                        let notice = Message {
+                            id: notice_id,
+                            from: session.clone(),
+                            to: None,
+                            kind: convoy_core::MessageKind::ClaimNotice,
+                            in_reply_to: None,
+                            body: format!("claimed {:?}", abs_path),
+                            created_at: chrono::Utc::now(),
+                            read_at: None,
+                        };
+                        let _ = self.store.insert_message(notice).await;
+                        self.notifier
+                            .message_created(&session, None, convoy_core::MessageKind::ClaimNotice)
+                            .await;
                         Response::ClaimResult {
                             claimed: true,
                             held_by: None,
@@ -231,11 +250,13 @@ impl Daemon {
             }
 
             Request::ReleaseFile { session, abs_path } => {
-                // Capture lock before releasing for Task 23 notifier
-                let _lock_before = self.store.lock_for(&abs_path).await.ok().flatten();
+                // Capture lock before releasing for notifier
+                let lock_before = self.store.lock_for(&abs_path).await.ok().flatten();
                 match self.store.release_file(&abs_path, &session).await {
                     Ok(()) => {
-                        // TODO(Task 23): notifier.lock_released(&lock_before.unwrap()).await
+                        if let Some(lock) = lock_before {
+                            self.notifier.lock_released(&lock).await;
+                        }
                         Response::Ok
                     }
                     Err(e) => Response::Error { message: e.to_string() },

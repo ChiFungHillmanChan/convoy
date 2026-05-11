@@ -3,7 +3,7 @@ use tempfile::tempdir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use convoy_daemon::{rpc::Request, server::Daemon};
+use convoy_daemon::{notify::Notifier, rpc::Request, server::Daemon};
 use convoy_store::MemoryStore;
 
 #[tokio::test]
@@ -11,7 +11,8 @@ async fn ping_pong() {
     let dir = tempdir().unwrap();
     let sock = dir.path().join("d.sock");
     let store = Arc::new(MemoryStore::new());
-    let daemon = Arc::new(Daemon::new(store));
+    let notifier = Notifier::new(store.clone());
+    let daemon = Arc::new(Daemon::new(store, notifier));
 
     let sock_clone = sock.clone();
     let server = tokio::spawn(async move {
